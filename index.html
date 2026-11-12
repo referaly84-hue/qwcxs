@@ -3278,7 +3278,9 @@ function paintMatch() {
     if (!L) { b.innerHTML = '<div class="empty panel">Составы откроются перед началом матча.</div>'; return; }
     b.innerHTML = '<div class="grid g2">' + ['home', 'away'].map(s => {
       const sideLineup = L[s] || { starters: [], bench: [], name: s === 'home' ? f.homeName : f.awayName, formation: '4-3-3' };
+      const sideTid = f[s];
       const logo = s === 'home' ? (f.homeLogo || teamLogo(f.home)) : (f.awayLogo || teamLogo(f.away));
+      const canSeeTactics = S.me?.role === 'admin' || (S.me?.teamId && S.me.teamId === sideTid) || sideLineup.speech !== undefined;
       const coachData = M.coaches?.[s];
       const coachInfo = coachData?.coach;
       const synergy = coachData?.synergy;
