@@ -1,0 +1,6 @@
+{
+  "name": "Вирт РПЛ и Кубок России — Симулятор с Жеребьевкой",
+  "description": "Интерактивный симулятор футбола с жеребьевкой, тактикой, влиянием тренеров, тренерского штаба и сыгранности на матчи.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

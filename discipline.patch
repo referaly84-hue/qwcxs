@@ -1,0 +1,283 @@
+--- a/server.ts	2026-11-10 04:57:40.771861035 +0000
++++ b/server.ts	2026-11-10 04:58:00.328890360 +0000
+@@ -1072,9 +1072,61 @@
+ function isAvail(p: any, date: string) {
+   if (!p) return false;
+   if (p.banLeft > 0) return false;
++  if (p.banUntil && p.banUntil >= date) return false;
+   if (p.out && p.out.until >= date) return false;
+   return true;
+ }
++/* ───────── дисциплина: сроки дисквалификаций и травм в «родных» единицах ───────── */
++const ruPlural = (n: number, a: string, b: string, c: string) => {
++  const m = Math.abs(n) % 100, d = m % 10;
++  return m > 10 && m < 20 ? c : d === 1 ? a : d >= 2 && d <= 4 ? b : c;
++};
++const ruDateStr = (d: string) => { const [y, m, dd] = String(d || '').split('-'); return y && m && dd ? `${dd}.${m}.${y}` : String(d || ''); };
++/* срок в днях → «3 месяца» / «2 недели» / «10 дней» */
++function daysLabel(d: number): string {
++  d = Math.max(1, Math.round(d));
++  if (d >= 45) { const n = Math.round(d / 30); return `${n} ${ruPlural(n, 'месяц', 'месяца', 'месяцев')}`; }
++  if (d >= 14) { const n = Math.round(d / 7); return `${n} ${ruPlural(n, 'неделя', 'недели', 'недель')}`; }
++  return `${d} ${ruPlural(d, 'день', 'дня', 'дней')}`;
++}
++/* дисквалификация: «1 матч», «3 матча», «до 15.01.2027 (2 месяца), все турниры» */
++function banText(p: any, date?: string): string {
++  if (!p) return '';
++  const parts: string[] = [];
++  if (p.banLeft > 0) parts.push(`${p.banLeft} ${ruPlural(p.banLeft, 'матч', 'матча', 'матчей')}`);
++  if (p.banUntil && (!date || p.banUntil >= date)) parts.push(`до ${ruDateStr(p.banUntil)}${p.banLabel ? ` (${p.banLabel})` : ''}, все турниры`);
++  return parts.join(' + ');
++}
++/* травма: «3 месяца (до 10.02.2027)» */
++function outText(p: any, date?: string): string {
++  if (!p || !p.out || !p.out.until) return '';
++  if (date && p.out.until < date) return '';
++  const lbl = p.out.label || (p.out.days ? daysLabel(p.out.days) : '');
++  return `${lbl ? lbl + ' ' : ''}(до ${ruDateStr(p.out.until)})`.trim();
++}
++function unavailText(p: any, date: string): string {
++  const out: string[] = [];
++  const b = banText(p, date);
++  if (b) out.push(`дисквалификация: ${b}${p.banReason ? ` — ${p.banReason}` : ''}`);
++  const o = outText(p, date);
++  if (o) out.push(`травма: ${o}`);
++  return out.join('; ');
++}
++/* дисциплина главного тренера и штаба (жёлтые/красные получают не только футболисты) */
++function discKey(tid: string, name: string) { return `${tid}|${norm(name)}`; }
++function getDisc(tid: string, name: string) {
++  if (!db.staffDiscipline || typeof db.staffDiscipline !== 'object') db.staffDiscipline = {};
++  const k = discKey(tid, name);
++  if (!db.staffDiscipline[k]) db.staffDiscipline[k] = { tid, name, yc: 0, banLeft: 0, reason: '' };
++  return db.staffDiscipline[k];
++}
++function bannedStaffText(tid: string): string[] {
++  const out: string[] = [];
++  for (const d of Object.values<any>(db.staffDiscipline || {})) {
++    if (d.tid === tid && d.banLeft > 0) out.push(`${d.name} — дисквалифицирован ещё на ${d.banLeft} ${ruPlural(d.banLeft, 'матч', 'матча', 'матчей')}${d.reason ? ` (${d.reason})` : ''}, на скамейке и в технической зоне отсутствует`);
++  }
++  return out;
++}
+ /* Сегодняшняя дата (YYYY-MM-DD) по Москве */
+ function todayMsk(): string {
+   try {
+@@ -2297,7 +2349,7 @@
+   ctx.race = top.length ? top.map((x: any) => `${x.n} (${tn(x.t)}) — ${x.g}`).join('; ') : 'пока нет данных';
+   ctx.weather = await weather(H, f.date, f.time);
+   ctx.fat = { home: fatText(f.home, f), away: fatText(f.away, f) };
+-  const miss = (s: string) => squadOf(f[s]).filter((p: any) => !isAvail(p, f.date)).map((p: any) => `${p.name} (${p.banLeft > 0 ? 'дисквалификация' : 'травма'})`);
++  const miss = (s: string) => squadOf(f[s]).filter((p: any) => !isAvail(p, f.date)).map((p: any) => `${p.name} (${unavailText(p, f.date) || 'недоступен'})`);
+   ctx.missing = { home: miss('home'), away: miss('away') };
+ 
+   const cH = getCoachForTeam(f.home), cA = getCoachForTeam(f.away);
+@@ -2313,6 +2365,7 @@
+     home: staffSummary(f.home),
+     away: staffSummary(f.away)
+   };
++  ctx.staffBans = { home: bannedStaffText(f.home), away: bannedStaffText(f.away) };
+   const comp = f.comp;
+   const rows = table(comp, f.date);
+   const rH = rows.find((x: any) => x.id === f.home);
+@@ -2355,7 +2408,7 @@
+ function lineText(ctx: any, s: string) {
+   const L = ctx.lineup[s], f = ctx.date, sd = ctx.sides[s];
+   const row = (pid: string) => cardLine(player(pid), f);
+-  return `СОСТАВ ${sd.name} (схема ${L.formation}), стартовые 11:\n${L.starters.map((p: string) => '- ' + row(p)).join('\n')}\nСкамейка запасных:\n${L.bench.map((p: string) => '- ' + row(p)).join('\n')}\nНедоступны (травмы/дисквалификации): ${ctx.missing[s].join(', ') || 'нет'}`;
++  return `СОСТАВ ${sd.name} (схема ${L.formation}), стартовые 11:\n${L.starters.map((p: string) => '- ' + row(p)).join('\n')}\nСкамейка запасных:\n${L.bench.map((p: string) => '- ' + row(p)).join('\n')}\nНедоступны (травмы/дисквалификации, в скобках срок возвращения): ${ctx.missing[s].join('; ') || 'нет'}\nЖёлтые карточки в текущем цикле (при 4-й игрок пропускает следующий матч): ${[...L.starters, ...L.bench].map((pid: string) => player(pid)).filter((p: any) => p && (p.seasonYC || 0) % 4 > 0).map((p: any) => `${p.name} — ${(p.seasonYC || 0) % 4}/4`).join(', ') || 'ни у кого нет'}\nДисквалифицированные тренеры/штаб: ${ctx.staffBans?.[s]?.join('; ') || 'нет'}`;
+ }
+ function buildUser(ctx: any, a: number, b: number, st: any, issues: string, mode: 'full' | 'light' = 'full') {
+   const H = ctx.sides.home.name, A = ctx.sides.away.name;
+@@ -2521,6 +2574,20 @@
+     if (actor && off.has(norm(ctx.names[actor])) && !['yellow', 'red', 'injury', 'foul'].includes(type) && !NONACT_TYPES.has(type)) {
+       probs.push(`${ctx.names[actor]} действует после ухода с поля`);
+     }
++    /* карточки могут получать и главный тренер/штаб (поле person+role), и запасные (они в players) */
++    let cardPerson: string | null = null, cardRole: string | null = null;
++    if ((type === 'yellow' || type === 'red') && !pids[0] && (e.person || e.role)) {
++      const tm = ['home', 'away'].includes(team) ? team : null;
++      const cx = tm ? ctx.coaches?.[tm] : null;
++      const staffList: string[] = cx ? [cx.coach?.name, ...((cx.staff || []).map((x: any) => x.name))].filter(Boolean) : [];
++      const want = norm(e.person || '');
++      const hit = staffList.find(nm => norm(nm) === want) || staffList.find(nm => want && (norm(nm).includes(want) || want.includes(norm(nm))));
++      if (!hit) { probs.push(`карточка лицу вне списка тренеров/штаба: ${e.person || e.role}`); continue; }
++      cardPerson = hit; cardRole = cx?.coach?.name === hit ? 'head' : 'staff';
++      const tid = tm ? ctx.sides?.[tm]?.id : null;
++      const dd = tid ? (db.staffDiscipline || {})[discKey(tid, hit)] : null;
++      if (dd && dd.banLeft > 0) { probs.push(`${hit} дисквалифицирован и не может быть на скамейке`); continue; }
++    }
+     const outDays = type === 'injury' ? (e.out_days !== undefined ? (isNaN(+e.out_days) ? 14 : clamp(Math.round(+e.out_days), 0, 240)) : 14) : undefined;
+     if (type === 'red' && pids[0]) off.add(norm(ctx.names[pids[0]]));
+     if (type === 'injury' && pids[0] && (outDays === undefined || outDays > 0)) off.add(norm(ctx.names[pids[0]]));
+@@ -2536,6 +2603,14 @@
+     const ev: any = { min, sec, team, type, players: names, pids, text: String(e.text || '').slice(0, 500) };
+     if (type === 'shot' || type === 'penalty') ev.xg = clamp(+e.xg || (type === 'penalty' ? 0.76 : 0.08), 0.01, 0.95);
+     if (type === 'injury') ev.out_days = outDays;
++    if (type === 'red') {
++      const bm = Math.round(+e.ban_matches);
++      ev.ban_matches = Number.isFinite(bm) && bm >= 1 ? clamp(bm, 1, 20) : 1;
++      const bd = Math.round(+e.ban_days);
++      if (Number.isFinite(bd) && bd > 0) ev.ban_days = clamp(bd, 1, 730);
++      if (e.ban_all === true || e.ban_all === 'true') ev.ban_all = true;
++    }
++    if (cardPerson) { ev.person = cardPerson; ev.role = cardRole; ev.players = []; }
+     out.push(ev);
+   }
+   {
+@@ -2942,18 +3017,50 @@
+     }
+     for (const p of squadOf(f[s])) {
+       if (p.banLeft > 0 && !(f.st.players[p.id])) p.banLeft--;
++      if (p.banLeft <= 0 && !(p.banUntil && p.banUntil >= f.date)) { p.banReason = ''; p.banLabel = ''; }
++    }
++    // отбытие дисквалификации главным тренером/штабом: сезонный матч пропущен
++    for (const d of Object.values<any>(db.staffDiscipline || {})) {
++      if (d.tid === f[s] && d.banLeft > 0) d.banLeft--;
+     }
+   }
+   for (const e of m.events) {
++    // карточка главному тренеру / тренерскому штабу
++    if (e.person && (e.type === 'yellow' || e.type === 'red')) {
++      if (isFriendlyMatch) continue;
++      const tid = f[e.team];
++      if (!tid) continue;
++      const d = getDisc(tid, e.person);
++      if (e.type === 'yellow') {
++        d.yc = (d.yc || 0) + 1;
++        if (d.yc % 4 === 0) { d.banLeft = Math.max(d.banLeft || 0, 1); d.reason = 'перебор жёлтых карточек'; }
++      } else {
++        d.banLeft = Math.max(d.banLeft || 0, e.ban_matches || 1);
++        d.reason = String(e.text || 'удаление').slice(0, 100);
++      }
++      continue;
++    }
+     const p = player(e.pids?.[0]);
+     if (!p) continue;
+-    if (e.type === 'injury' && (e.out_days === undefined || e.out_days > 0)) p.out = { until: addDays(f.date, e.out_days || 14), reason: e.text.slice(0, 120) };
++    if (e.type === 'injury' && (e.out_days === undefined || e.out_days > 0)) {
++      const days = e.out_days || 14;
++      p.out = { until: addDays(f.date, days), days, label: daysLabel(days), reason: e.text.slice(0, 120) };
++    }
+     // травма (строка выше) сохраняется и в товарищеском матче; карточки в официальные матчи не переходят
+     if (isFriendlyMatch) continue;
+-    if (e.type === 'red') p.banLeft = 1;
++    if (e.type === 'red') {
++      // срок красной не всегда 1 матч: серьёзное нарушение — больше матчей, возможен бан по времени на все турниры
++      p.banLeft = Math.max(p.banLeft || 0, e.ban_matches || 1);
++      p.banReason = 'прямая красная карточка';
++      if (e.ban_days) { p.banUntil = addDays(f.date, e.ban_days); p.banLabel = daysLabel(e.ban_days); }
++    }
+     if (e.type === 'yellow') {
+       p.seasonYC = (p.seasonYC || 0) + 1;
+-      if (p.seasonYC % 4 === 0) p.banLeft = Math.max(p.banLeft || 0, 1);
++      if (p.seasonYC % 4 === 0) {
++        // 4 жёлтых = пропуск 1 матча, затем отсчёт карточек начинается заново (seasonYC % 4)
++        p.banLeft = Math.max(p.banLeft || 0, 1);
++        if (!p.banReason) p.banReason = 'перебор жёлтых карточек';
++      }
+     }
+   }
+   invalidateAgg();
+@@ -3432,6 +3539,7 @@
+   db.fixtures.push(...cupFixtures);
+ 
+   db.players.forEach((p: any) => { p.seasonYC = 0; p.banLeft = 0; });
++  db.staffDiscipline = {};
+   ensureDualTimes(season, true);
+   invalidateAgg();
+   save();
+@@ -4547,7 +4655,11 @@
+   realClub: p.realClub || '',
+   verified: !!p.verified,
+   out: p.out,
+-  banLeft: p.banLeft
++  banLeft: p.banLeft,
++  banUntil: p.banUntil || null,
++  banText: banText(p),
++  outText: outText(p),
++  yellowCycle: (p.seasonYC || 0) % 4
+ });
+ 
+ const pubFx = (f: any) => {
+@@ -5522,7 +5634,7 @@
+     staffSlots: staffSlots(req.tid),
+     staffOffers: staffOffersFor(req.tid),
+     family: sisterIdsOf(req.tid).map((id: string) => ({ id, name: tn(id), logo: teamLogo(id), comp: team(id)?.comp })),
+-    squad: sq.map((p: any) => ({ ...pubPlayer(p), available: isAvail(p, today), card: p })),
++    squad: sq.map((p: any) => ({ ...pubPlayer(p), available: isAvail(p, today), unavailText: unavailText(p, today), card: p })),
+     tactic: db.tactics[req.tid] || null,
+     upcoming: up.map((f: any) => ({
+       ...pubFx(f),
+@@ -6319,6 +6431,9 @@
+   }
+   if ('out' in b) p.out = b.out && b.out.until ? b.out : null;
+   if (b.banLeft !== undefined) p.banLeft = +b.banLeft || 0;
++  if (b.banUntil !== undefined) p.banUntil = b.banUntil || null;
++  if (b.banLabel !== undefined) p.banLabel = String(b.banLabel || '');
++  if (b.banReason !== undefined) p.banReason = String(b.banReason || '');
+   p.updatedAt = new Date().toISOString();
+   save();
+   res.json({ ok: 1, player: p });
+--- a/index.html	2026-11-10 04:57:40.773186975 +0000
++++ b/index.html	2026-11-10 04:58:00.331615796 +0000
+@@ -4085,7 +4085,7 @@
+         <td>${age(p.born)}${isBday(p.born) ? ' 🎂' : ''}</td>
+         <td class="l">${legTag}<div style="margin-top:4px"><input class="nat-edit" list="nat_list" data-pid="${p.id}" value="${e(p.nation || 'Россия')}" title="Страна (гражданство) — можно изменить" style="width:150px;padding:3px 6px;font-size:12.5px;min-height:0"></div></td>
+         <td class="l muted small" style="white-space:normal;max-width:320px">${e(p.style)}</td>
+-        <td class="l">${p.available ? '<span class="tag">готов</span>' : `<span class="tag" style="background:#fde8e6">${p.banLeft > 0 ? 'дисквалификация' : 'травма'}</span>`}</td>
++        <td class="l">${p.available ? '<span class="tag">готов</span>' : `<span class="tag" style="background:#fde8e6">${e(p.unavailText || (p.banLeft > 0 ? 'дисквалификация' : 'травма'))}</span>`}${p.available && p.yellowCycle ? `<div class="muted small">ЖК: ${p.yellowCycle}/4</div>` : ''}</td>
+         <td><button class="btn alt sm" data-rm="${p.id}">убрать</button></td>
+       </tr>`;
+     }).join('') || '<tr><td colspan="7" class="empty">Заявка пуста.</td></tr>'}</tbody></table></div>
+--- a/prompt.txt	2026-11-10 04:57:40.774367170 +0000
++++ b/prompt.txt	2026-11-10 04:58:23.875621921 +0000
+@@ -206,9 +206,21 @@
+ Тайм с серией замен, мелкими травмами и водопоем: +3..+5 минут.
+ Тайм с долгими проверками ВАР, дымом пиротехники или тяжелой травмой: +6..+10 минут.
+ Если нападающий будет стоять на воротах, то логично что он будет играть хуже вратаря
++═══ 8. ДИСЦИПЛИНА: КАРТОЧКИ, ДИСКВАЛИФИКАЦИИ, ТРАВМЫ И ЗАЯВКА ═══
++Кто может получить карточку: не только игроки на поле, но и ЗАПАСНЫЕ (за споры с арбитром, неспортивное поведение на скамейке, выбегание на поле), ГЛАВНЫЙ ТРЕНЕР и члены ТРЕНЕРСКОГО ШТАБА (протесты у бровки, споры с четвёртым арбитром, нарушение границ технической зоны). Тренеры и штаб получают и жёлтые, и красные карточки — особенно в нервных, принципиальных и дерби-матчах, при спорных решениях арбитра и пропущенных голах на последних минутах. Не ограничивай карточки одними полевыми игроками.
++Заявка и недоступность: в контексте есть список «Недоступны (травмы/дисквалификации, в скобках срок возвращения)». Такие игроки НЕ в заявке на матч: ни в старте, ни на скамейке, ни в событиях матча. Дисквалифицированный тренер/штабист (список «Дисквалифицированные тренеры/штаб») отсутствует на скамейке и в технической зоне: он не получает карточек, не даёт указаний у бровки; комментатор может упомянуть, что он наблюдает за игрой с трибуны.
++Жёлтые карточки: после 4-й жёлтой игрок пропускает следующий матч «по перебору жёлтых», после чего счёт жёлтых начинается заново (в контексте указано «ЖК в текущем цикле»). Если у игрока уже 3 из 4, комментатор может отметить, что очередная жёлтая означает пропуск следующего матча. Вторая жёлтая в одном матче = удаление (red).
++Красные карточки: срок дисквалификации зависит от тяжести нарушения и НЕ всегда равен одному матчу:
++• вторая жёлтая, фол последней надежды, игра рукой на линии ворот — 1 матч;
++• грубая игра, опасный подкат, удар соперника без мяча, драка — 2–4 матча;
++• оскорбления арбитра, плевок, расистские оскорбления, нападение на арбитра или соперника — 5 матчей и больше, вплоть до бана по времени ("ban_days") на все турниры.
++Дисквалификация действует во ВСЕХ турнирах (РПЛ, кубок, остальные соревнования), а не только в том, где получена карточка.
++Срок возвращения называй в тех единицах, в которых он назначен: «1 матч РПЛ», «3 матча», «3 месяца» (травма, бан по времени), а не в пересчёте на другие единицы. Травма на 90 дней = «3 месяца»; на 10 дней = «10 дней».
++Если в тексте события упоминается тяжесть наказания или срок травмы — он должен совпадать с полями JSON ("ban_matches", "ban_days", "out_days").
+ ═══ 9. СТРОГИЕ ЗАПРЕТЫ И ОГРАНИЧЕНИЯ ═══
+ Используй ТОЛЬКО реальных игроков из переданного списка состава (старт и скамейка). Называй их в точности как в заявке. Запрещено выдумывать фамилии.
+ Игрок, получивший красную карточку или унесенный на носилках, больше не принимает участия в матче.
++Игроков из списка «Недоступны» (травма/дисквалификация) в матче быть не может. Дисквалифицированный тренер/штабист в матче не участвует.
+ Лимит замен — строго не более 5 замен у каждой команды за матч (учти уже израсходованные слоты), но при жтом только 3 слота, тоесть только 3 раза можн осделать замену (например, если за один раз выйдет 2 футболиста - это все равно еще один слот. слот - количество раз). 5 футблистов - 3 слота для замен у каждой команды
+ Запрещено выводить в тексте комментатора внутренние математические коэффициенты: xG, формулы, вероятности и скрытые параметры. Значение xg пишется ТОЛЬКО в поле объекта JSON.
+ Запрещены мета-комментарии нейросети («Как симулятор, я моделирую...»). Только атмосфера реального репортажа.
+@@ -224,7 +236,12 @@
+ "players": ["Имя Фамилия", ...],
+ "text": "Живая реплика футбольного комментатора (1–3 предложения с нервом и деталями эпизода).",
+ "xg": 0.14,
+-"out_days": 0
++"out_days": 0,
++"person": "Имя Фамилия (только для yellow/red тренера или штаба)",
++"role": "head | staff (только вместе с person)",
++"ban_matches": 1,
++"ban_days": 0,
++"ban_all": false
+ }
+ ],
+ "state_at_end": {
+@@ -248,10 +265,11 @@
+ foul: [нарушитель, пострадавший]
+ tackle: [отобравший, потерявший]
+ sub: [вышедший со скамейки, покинувший поле]
+-yellow / red / injury / offside: [основной игрок]
++yellow / red / injury / offside: [основной игрок] (это может быть и запасной, не вышедший на поле). Если карточку получил ГЛАВНЫЙ ТРЕНЕР или член ШТАБА: "players": [], а имя указывается в "person", должность — в "role" ("head" — главный тренер, "staff" — штаб); "team" — его команда
+ pass / dribble / possession: [игрок с мячом, (адресат передачи)]
+ "xg": число с плавающей точкой (0.01–0.95), заполняется ТОЛЬКО у событий "shot" (включая удар с пенальти ≈ 0.76). У остальных событий это поле не передается либо равно null.
+ "out_days": целое число дней пропуска, заполняется ТОЛЬКО у событий "injury". При микроспазмах и возвращении в строй = 0.
++"ban_matches": целое число матчей дисквалификации, ТОЛЬКО у "red" (по умолчанию 1, при серьёзных нарушениях больше; см. раздел 8). "ban_days": дни бана по времени, только для особо тяжких нарушений (0 или не передавать — бана по времени нет). "ban_all": true — бан на все турниры, только при особо тяжких нарушениях. У остальных событий эти поля не передаются.
+ Счёт матча в объектах событий НЕ указывается — счет вычисляется движком по цепочке событий "goal" и "own_goal". В поле "state_at_end.key_moments" указывать текущий счет разрешено.
+ Время строго неубывающее (секунды от 0 до 59).
+ Также смотри, при симуляции матча, нейрсеть должна учитывать, данные которые берутся из самого сайта: расположение команды в таблице, статитику (лучшегих бомбардиров и так далее), учитывать тактики пользователей, учитывать тренероочный процесс, учитывать тренера и тренерский штаб, учитывать игроков(их биографию как в реальной жизни так и в симуляторе), учитывать принциапиальность матча, учитывать бригаду арбитров и их биографию и портрет. Матчи должны быть очень реалистичными!
+\ No newline at end of file
