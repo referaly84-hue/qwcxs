@@ -2675,6 +2675,7 @@ function syncSecretsFromDisk(force = false) {
     lastSecretsMtimeMs = st.mtimeMs;
     const sec = readSecretsFile();
     if (typeof keyCooldown !== "undefined" && keyCooldown) keyCooldown.clear();
+    if (typeof modelCooldown !== "undefined" && modelCooldown) modelCooldown.clear();
     if (!db || !db.settings) return true;
     let changed = false;
     if (!db.settings.keys) db.settings.keys = {};
@@ -5072,7 +5073,8 @@ function httpErr(status, body) {
   return Object.assign(new Error(msg), { status, body, daily: /PerDay|per day|daily/i.test(raw) });
 }
 async function callProv(p, sys, user, o) {
-  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 24e4);
+  const timeoutMs = o.timeoutMs || (o.max >= 16e3 ? 9e4 : 2e4);
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     if (p.n === "gemini") {
       const model = resolveGeminiModel(p.model);
@@ -5114,7 +5116,7 @@ async function callProv(p, sys, user, o) {
         if (status) {
           throw Object.assign(new Error(msg), {
             status,
-            daily: /PerDay|per day|daily|RESOURCE_EXHAUSTED/i.test(msg)
+            daily: /PerDay|per day|daily/i.test(msg)
           });
         }
         throw err;
@@ -5158,11 +5160,17 @@ function recordAiHistory(entry) {
   if (db.aiHistory.length > 500) db.aiHistory.length = 500;
 }
 var keyCooldown = /* @__PURE__ */ new Map();
+var modelCooldown = /* @__PURE__ */ new Map();
 var geminiRoundRobinIndex = 0;
 var coolKey = (p, e) => {
   const ms = e.daily ? 60 * 6e4 : e.status === 429 ? 9e4 : 60 * 6e4;
   keyCooldown.set(p.key, Date.now() + ms);
 };
+var coolModel = (p, model, e) => {
+  const ms = e.daily ? 15 * 6e4 : e.status === 429 ? 9e4 : e.status >= 500 || e.name === "AbortError" ? 3e4 : 6e4;
+  modelCooldown.set(`${p.key}|${model}`, Date.now() + ms);
+};
+var GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-3-flash-preview"];
 async function llm(sys, user, { json = true, task = "", temp = 0.9, max = 16e3, grounded = false } = {}) {
   const cx = aiCtx.getStore();
   if (!cx?.ai) throw Object.assign(new Error("\u0418\u0418 \u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0443"), { noLLM: true });
@@ -5175,31 +5183,64 @@ async function llm(sys, user, { json = true, task = "", temp = 0.9, max = 16e3, 
     geminiRoundRobinIndex = (geminiRoundRobinIndex + 1) % L.length;
     L = [...L.slice(geminiRoundRobinIndex), ...L.slice(0, geminiRoundRobinIndex)];
   }
-  let last;
+  const attempts: Array<{ p: any; model: string; grounded: boolean }> = [];
   for (const p of L) {
-    for (let a = 0; a < 2; a++) {
-      if (cx.cap && cx.calls >= cx.cap) throw Object.assign(new Error(`\u043B\u0438\u043C\u0438\u0442 \u0418\u0418-\u0437\u0430\u043F\u0440\u043E\u0441\u043E\u0432 \u043D\u0430 \u043C\u0430\u0442\u0447 (${cx.cap}) \u0438\u0441\u0447\u0435\u0440\u043F\u0430\u043D`), { capped: true });
-      cx.calls++;
-      const t0 = Date.now();
-      try {
-        const text = await callProv(p, sys, user, { json, temp, max, grounded });
-        if (!text.trim()) throw new Error("\u043F\u0443\u0441\u0442\u043E\u0439 \u043E\u0442\u0432\u0435\u0442");
-        llog({ task, p: p.id || p.n, ok: 1, ms: Date.now() - t0 });
-        recordAiHistory({ task, provider: p.n, model: p.model, user, sys, ok: 1, ms: Date.now() - t0, response: text });
-        return text;
-      } catch (e) {
-        last = e;
-        llog({ task, p: p.id || p.n, ok: 0, ms: Date.now() - t0, err: e.message.slice(0, 160) });
-        recordAiHistory({ task, provider: p.n, model: p.model, user, sys, ok: 0, ms: Date.now() - t0, err: e.message });
-        if (e.status === 429 || e.status === 401 || e.status === 403) coolKey(p, e);
-        if (e.status === 429) {
-          cx.calls--;
-          console.warn(`[LLM Failover] \u041A\u043B\u044E\u0447 ${p.id || p.n} \u0438\u0441\u0447\u0435\u0440\u043F\u0430\u043B \u043B\u0438\u043C\u0438\u0442 (HTTP 429). \u041C\u0433\u043D\u043E\u0432\u0435\u043D\u043D\u043E\u0435 \u043F\u0435\u0440\u0435\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \u043D\u0430 \u0440\u0435\u0437\u0435\u0440\u0432\u043D\u044B\u0439 \u043A\u043B\u044E\u0447...`);
-          await sleep(500);
-          break;
+    if (p.n !== "gemini") {
+      attempts.push({ p, model: p.model, grounded: false });
+      continue;
+    }
+    const primary = resolveGeminiModel(p.model);
+    const groundOk = grounded && (modelCooldown.get(`${p.key}|grounded`) || 0) <= now0;
+    if ((modelCooldown.get(`${p.key}|${primary}`) || 0) <= now0) {
+      if (groundOk) attempts.push({ p, model: primary, grounded: true });
+      attempts.push({ p, model: primary, grounded: false });
+    }
+  }
+  for (const fbModel of GEMINI_FALLBACK_MODELS) {
+    for (const p of L) {
+      if (p.n !== "gemini") continue;
+      if (resolveGeminiModel(p.model) === fbModel) continue;
+      if ((modelCooldown.get(`${p.key}|${fbModel}`) || 0) <= now0) {
+        attempts.push({ p, model: fbModel, grounded: false });
+      }
+    }
+  }
+  if (!attempts.length) {
+    for (const p of L) attempts.push({ p, model: p.model, grounded: false });
+  }
+  let last;
+  for (const att of attempts) {
+    const p = att.p;
+    const provRun = p.n === "gemini" ? { ...p, model: att.model } : p;
+    if (cx.cap && cx.calls >= cx.cap) throw Object.assign(new Error(`\u043B\u0438\u043C\u0438\u0442 \u0418\u0418-\u0437\u0430\u043F\u0440\u043E\u0441\u043E\u0432 \u043D\u0430 \u043C\u0430\u0442\u0447 (${cx.cap}) \u0438\u0441\u0447\u0435\u0440\u043F\u0430\u043D`), { capped: true });
+    cx.calls++;
+    const t0 = Date.now();
+    try {
+      const text = await callProv(provRun, sys, user, { json, temp, max, grounded: att.grounded });
+      if (!text.trim()) throw new Error("\u043F\u0443\u0441\u0442\u043E\u0439 \u043E\u0442\u0432\u0435\u0442");
+      if (p.n === "gemini") modelCooldown.delete(`${p.key}|${provRun.model}`);
+      llog({ task, p: provRun.id || provRun.n, ok: 1, ms: Date.now() - t0 });
+      recordAiHistory({ task, provider: provRun.n, model: provRun.model, user, sys, ok: 1, ms: Date.now() - t0, response: text });
+      return text;
+    } catch (e: any) {
+      last = e;
+      llog({ task, p: provRun.id || provRun.n, ok: 0, ms: Date.now() - t0, err: String(e.message || e).slice(0, 160) });
+      recordAiHistory({ task, provider: provRun.n, model: provRun.model, user, sys, ok: 0, ms: Date.now() - t0, err: e.message || String(e) });
+      if (e.status === 401 || e.status === 403) {
+        coolKey(p, e);
+      } else if (e.status === 429 || e.status === 404 || e.status >= 500 || e.name === "AbortError") {
+        cx.calls--;
+        if (p.n === "gemini") {
+          if (att.grounded) {
+            const ms = e.daily ? 15 * 6e4 : e.status === 429 ? 3 * 6e4 : 6e4;
+            modelCooldown.set(`${p.key}|grounded`, Date.now() + ms);
+          } else {
+            coolModel(p, att.model, e);
+          }
+        } else if (e.status === 429) {
+          coolKey(p, e);
         }
-        if (e.status >= 500 || e.name === "AbortError") await sleep(1500);
-        else if (e.status) break;
+        await sleep(250);
       }
     }
   }
@@ -10954,6 +10995,7 @@ app.post("/api/admin/settings", admin, (req, res) => {
     }
   }
   keyCooldown.clear();
+  modelCooldown.clear();
   if (Object.keys(secUpdates).length > 0) {
     saveSecretsFile(secUpdates);
   }
@@ -11357,7 +11399,7 @@ async function portraitBatch(list, strongGround = false) {
       });
       return { updated, notFound: 0 };
     } catch (e) {
-      console.warn("portraitBatch LLM error, using analytical generator:", e.message);
+      console.log("[Portrait Fallback] LLM unavailable, using analytical generator");
     }
   }
   list.forEach((p) => {
@@ -11375,7 +11417,7 @@ app.post("/api/admin/player/portrait", admin, async (req, res) => {
     save();
     res.json({ ok: 1, player: pubPlayer(p) });
   } catch (e) {
-    console.warn("player/portrait error, falling back to analytical generator:", e.message);
+    console.log("[Portrait Fallback] player/portrait falling back to analytical generator");
     applyPortrait(p, buildAnalyticalPlayerPortrait(p));
     save();
     res.json({ ok: 1, player: pubPlayer(p), fallback: true });
@@ -12635,7 +12677,7 @@ async function staffPortrait(m) {
       const applied = applyStaffPortrait(m, Array.isArray(r?.players) ? r.players[0] : r);
       if (applied) return true;
     } catch (e) {
-      console.warn("staffPortrait LLM error, falling back to analytical staff generator:", e.message);
+      console.log("[Portrait Fallback] staffPortrait falling back to analytical staff generator");
     }
   }
   return buildAnalyticalStaffPortrait(m);
@@ -13557,7 +13599,7 @@ async function enrichEuropeanPlayer(playerName, feeStr, transferType = "transfer
       if (info?.style) style = String(info.style);
       return { pos, age: age2, nationality, fromClub, marketValue, ovr, style };
     } catch (e) {
-      console.warn("enrichEuropeanPlayer LLM error:", e.message);
+      console.log("[Enrich Fallback] enrichEuropeanPlayer falling back to local data");
     }
   }
   const feeNum = parseFeeAmount(feeStr);
