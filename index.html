@@ -3331,12 +3331,23 @@ function paintMatch() {
   } else if (mtab === 'h2h') {
     const h2h = M.h2h;
     if (!h2h || !h2h.matches || !h2h.matches.length) {
-      b.innerHTML = '<div class="panel"><div class="empty">История встреч между этими командами пока не сформирована.</div></div>';
+      b.innerHTML = `<div class="panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px">
+          <div>
+            <h3 style="margin:0;display:flex;align-items:center;gap:8px">
+              <span>⚔️</span> Последние встречи
+            </h3>
+            <div class="small muted" style="margin-top:2px">Статистика очных матчей, сыгранных в симуляции</div>
+          </div>
+          <div class="tag" style="background:#f1f5f9;font-weight:700">Всего игр: 0</div>
+        </div>
+        <div class="empty">Матчей между этими командами ещё не было.</div>
+      </div>`;
       return;
     }
 
     const { homeTeam, awayTeam, stats, matches } = h2h;
-    const total = stats.total || 10;
+    const total = stats.total || matches.length;
     const homeWinPct = Math.round((stats.homeWins / total) * 100);
     const drawPct = Math.round((stats.draws / total) * 100);
     const awayWinPct = Math.round((stats.awayWins / total) * 100);
@@ -3346,9 +3357,9 @@ function paintMatch() {
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px">
           <div>
             <h3 style="margin:0;display:flex;align-items:center;gap:8px">
-              <span>⚔️</span> История личных встреч (последние 10 матчей)
+              <span>⚔️</span> Последние встречи (сыгранные матчи: ${total})
             </h3>
-            <div class="small muted" style="margin-top:2px">Статистика очных поединков в РПЛ и Кубках</div>
+            <div class="small muted" style="margin-top:2px">Статистика очных поединков, сыгранных в симуляции</div>
           </div>
           <div class="tag" style="background:#f1f5f9;font-weight:700">Всего игр: ${total}</div>
         </div>
@@ -8847,9 +8858,10 @@ async function pgAdmin(app) {
     const ST = { wait: ['ждёт', '#2563eb'], queued: ['в очереди на запрос', '#b45309'], gen: ['идёт запрос к ИИ', '#b45309'], hold: ['готов, ждёт начала', '#166534'], live: ['в эфире', '#dc2626'], overdue: ['пропущен (запуск вручную)', '#6b7280'], excluded: ['исключён из автозапуска', '#6b7280'], error: ['ошибка — нужен ручной запуск', '#dc2626'] };
     ab.innerHTML = `
     <div class="panel"><h3>Очередь нейросети</h3>
-      <p class="muted small" style="margin:0 0 8px">ИИ доступен только администратору. По расписанию реального времени сами играются только <b>РПЛ, Кубок России (и Суперкубок) и переходные матчи</b>: запрос уходит за ${q.leadSec} с до начала и только для этого матча (${q.items.some(i => !i.light) ? '2 запроса: по тайму' : 'по тайму'}). Первая и Вторая лиги и Медиалига запускаются только вручную и симулируются одним запросом — счёт и статистика.</p>
-      <div class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:8px">
-        <span class="tag" style="background:${q.auto ? '#f0fdf4' : '#fef2f2'};color:${q.auto ? '#166534' : '#991b1b'}">Автозапуск: ${q.auto ? 'включён' : 'выключен (Настройки)'}</span>
+      <p class="muted small" style="margin:0 0 8px">ИИ доступен только администратору. По расписанию реального времени сами играются <b>РПЛ, Кубок России (и Суперкубок), переходные и товарищеские матчи</b>: запрос уходит за ${q.leadSec} с до начала и только для этого матча (${q.items.some(i => !i.light) ? '2 запроса: по тайму' : 'по тайму'}). Первая и Вторая лиги и Медиалига запускаются только вручную и симулируются одним запросом — счёт и статистика.</p>
+      <div class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+        <span class="tag" style="background:${q.auto ? '#f0fdf4' : '#fef2f2'};color:${q.auto ? '#166534' : '#991b1b'}">Автозапуск: ${q.auto ? 'включён' : 'выключен'}</span>
+        <button class="btn sm ${q.auto ? 'alt' : ''}" id="aq_toggle_auto">${q.auto ? '⏸ Выключить автозапуск' : '▶ Включить автозапуск'}</button>
         <span class="tag">Ключей: ${q.keys}${q.keysCooling ? ` (на паузе: ${q.keysCooling})` : ''}</span>
         <span class="tag">Идёт запросов: ${q.running} · в очереди: ${q.queued}</span>
         <span class="tag">За час: ${q.lastHour.ok} успешных, ${q.lastHour.fail} ошибок</span>
@@ -8866,12 +8878,16 @@ async function pgAdmin(app) {
         const [t, c] = ST[i.state] || [i.state, '#111'];
         return `<tr><td class="l">${e(i.home)} — ${e(i.away)}</td><td class="l">${e(i.comp)}<div class="muted small">${e(i.round || '')}</div></td><td class="l">${fmt(i.startAt)}</td><td class="l">${i.auto ? hm(i.triggerAt).slice(0, 8) + ' · ' + fmt(i.triggerAt).slice(0, 5) : '<span class="muted">вручную</span>'}</td><td>${i.aiCalls ? i.aiCalls + ' / ' : ''}${i.requests}${i.light ? ' (сводка)' : ''}</td><td class="l"><span style="color:${c};font-weight:600">${t}</span>${i.err ? `<div class="muted small">${e(i.err)}</div>` : ''}</td><td><div class="row" style="gap:4px;justify-content:flex-end">
           ${i.state === 'queued' ? `<button class="btn alt sm" data-qdeq="${i.id}">Убрать из очереди</button>` : ''}
-          ${['wait', 'overdue', 'error', 'excluded'].includes(i.state) ? `<button class="btn sm" data-qrun="${i.id}">Запустить сейчас</button>` : ''}
+          ${['wait', 'hold', 'overdue', 'error', 'excluded'].includes(i.state) ? `<button class="btn sm" data-qrun="${i.id}">Запустить сейчас</button>` : ''}
           ${i.auto && ['wait', 'error', 'overdue'].includes(i.state) ? `<button class="btn alt sm" data-qtog="${i.id}" data-v="1">Исключить из авто</button>` : ''}
           ${i.auto && i.state === 'excluded' ? `<button class="btn alt sm" data-qtog="${i.id}" data-v="0">Вернуть в авто</button>` : ''}
         </div></td></tr>`;
       }).join('')}</tbody></table></div>` : '<div class="empty">Нет матчей в очереди и на ближайшие 14 дней.</div>'}
     </div>`;
+    $('#aq_toggle_auto').onclick = async () => {
+      await act(() => api('/admin/settings', { auto: !q.auto }), !q.auto ? 'Автозапуск включён' : 'Автозапуск выключен');
+      re();
+    };
     $('#aq_save').onclick = async () => {
       await act(() => api('/admin/settings', { aiLeadSec: +$('#aq_lead').value, maxAiCalls: +$('#aq_cap').value, aiParallel: +$('#aq_par').value }), 'Сохранено');
       re();
@@ -9096,7 +9112,8 @@ async function pgAdmin(app) {
     ` : ''}
     <label style="margin-top:10px">Адрес сайта (для ссылок в Telegram)</label><input id="url" value="${e(s.siteUrl)}" placeholder="https://mysite.ru"></div>
     <div class="panel"><h3>Игра</h3><div class="row"><div style="flex:1;min-width:200px"><label>Максимум игроков в заявке</label><input id="sqm" type="number" min="1" max="28" value="${Math.min(28, s.squadMax || 28)}"><div class="muted small" style="margin-top:2px">Максимум по регламенту: 28 игроков</div></div><div style="flex:1;min-width:200px"><label>Запросов на матч</label><select id="chk"><option value="2" ${s.chunks != 6 ? 'selected' : ''}>2 (по таймам)</option><option value="6" ${s.chunks == 6 ? 'selected' : ''}>6 (по 15 минут)</option></select></div></div>
-    <label style="margin-top:8px"><input type="checkbox" id="auto" ${s.auto ? 'checked' : ''} style="width:auto"> Автозапуск матчей по расписанию</label></div>
+    <label style="margin-top:8px"><input type="checkbox" id="auto" ${s.auto ? 'checked' : ''} style="width:auto"> Автозапуск матчей по расписанию</label>
+    <label style="margin-top:6px"><input type="checkbox" id="tdef" ${s.techDefeat ? 'checked' : ''} style="width:auto"> Авто-ТН (техническое поражение при неподанном составе или неполном штабе)</label></div>
     <div class="panel"><h3>Системный промпт матча</h3><textarea id="sys" style="min-height:220px;font:13px/1.4 ui-monospace,Consolas,monospace">${e(s.systemPrompt)}</textarea></div>
     <div class="row"><button class="btn" id="ssv">Сохранить настройки</button></div>
     <div class="panel" style="margin-top:16px"><h3>Последние запросы к нейросети</h3><div class="wrap"><table><thead><tr><th class="l">Время</th><th class="l">Задача</th><th class="l">Провайдер</th><th>мс</th><th class="l">Результат</th></tr></thead><tbody>${ov.log.map(l => `<tr><td class="l">${new Date(l.ts).toLocaleTimeString('ru-RU')}</td><td class="l">${e(l.task)}</td><td class="l">${e(l.p)}</td><td>${l.ms}</td><td class="l small" style="white-space:normal">${l.ok ? 'ок' : e(l.err)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Пока пусто</td></tr>'}</tbody></table></div></div>`;
@@ -9129,7 +9146,7 @@ async function pgAdmin(app) {
         models[n] = $('#m_' + n).value;
         if (!keys[n]) delete keys[n];
       }
-      await act(() => api('/admin/settings', { keys, models, grounding: $('#gr').checked, secPerMin: $('#spm').value, breakSec: $('#brk').value, tgToken: $('#tgt').value, tgChat: $('#tgc').value, siteUrl: $('#url').value, squadMax: $('#sqm').value, chunks: $('#chk').value, auto: $('#auto').checked, systemPrompt: $('#sys').value }), 'Настройки сохранены');
+      await act(() => api('/admin/settings', { keys, models, grounding: $('#gr').checked, secPerMin: $('#spm').value, breakSec: $('#brk').value, tgToken: $('#tgt').value, tgChat: $('#tgc').value, siteUrl: $('#url').value, squadMax: $('#sqm').value, chunks: $('#chk').value, auto: $('#auto').checked, techDefeat: $('#tdef').checked, systemPrompt: $('#sys').value }), 'Настройки сохранены');
       re();
     };
   }

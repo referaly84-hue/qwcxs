@@ -1567,7 +1567,7 @@ function initCup2026(season, rplTeams, fnlTeams, secondLeagueTeams, mediaTeams, 
     C: [],
     D: []
   };
-  const rpl = [...rplTeams || []];
+  const rpl = shuffle(rplTeams || [], Math.random);
   const keys = ["A", "B", "C", "D"];
   rpl.forEach((t, i) => {
     const gKey = keys[i % 4];
@@ -2819,7 +2819,37 @@ var SYS_DEFAULT = "";
 try {
   SYS_DEFAULT = fs3.readFileSync(path3.join(__dirname, "prompt.txt"), "utf8");
 } catch {
-  SYS_DEFAULT = "\u0422\u044B \u2014 \u0444\u0443\u0442\u0431\u043E\u043B\u044C\u043D\u044B\u0439 \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0442\u043E\u0440 \u0438 \u0441\u043F\u043E\u0440\u0442\u0438\u0432\u043D\u044B\u0439 \u0441\u0438\u043C\u0443\u043B\u044F\u0442\u043E\u0440 \u0447\u0435\u043C\u043F\u0438\u043E\u043D\u0430\u0442\u0430 \u0420\u043E\u0441\u0441\u0438\u0438 \u043F\u043E \u0444\u0443\u0442\u0431\u043E\u043B\u0443 (\u0412\u0438\u0440\u0442 \u0420\u041F\u041B). \u0421\u0433\u0435\u043D\u0435\u0440\u0438\u0440\u0443\u0439 \u0440\u0435\u0430\u043B\u0438\u0441\u0442\u0438\u0447\u043D\u044B\u0439 \u043E\u0442\u0440\u0435\u0437\u043E\u043A \u043C\u0430\u0442\u0447\u0430 \u0432 \u0444\u043E\u0440\u043C\u0430\u0442\u0435 JSON.";
+  SYS_DEFAULT = `Ты — профессиональный российский футбольный комментатор и реалистичный симулятор матчей (Вирт РПЛ, Кубок России, Суперкубок, ФНЛ, товарищеские и стыковые матчи).
+Симулируй указанный отрезок матча максимально живо, тактически достоверно и строго учитывай все входные данные: силу и профиль игроков, сыгранность, тактику и синергию с тренером, судейскую манеру и VAR, погоду, усталость и календарь. Используй ТОЛЬКО игроков из переданных составов.
+
+═══ РАЗДЕЛ 0: ПРЕМАТЧ И ПОСТМАТЧ ═══
+• Прематч создавай ТОЛЬКО в первом отрезке матча (когда отрезок начинается с минуты 1). У каждого события прематча ОБЯЗАТЕЛЬНО указывай отрицательную минуту min от -15 до -1 (по порядку времени до стартового свистка).
+• Допустимые типы прематча: commentator_intro, lineup, tactical_note, stat_display, crowd, walkout, anthem, coin_toss, photo, warmup, kickoff_buildup, incident.
+• 0.8 (постматч): после fulltime в конце 2-го тайма можно добавить 1–3 коротких события (min от 90 до 95) с типами crowd, tactical_note или incident.
+
+═══ РАЗДЕЛ 10: ФОРМАТ ВЫВОДА (СТРОГО JSON) ═══
+Верни строго один JSON-объект без markdown-обёртки:
+{
+  "events": [
+    {
+      "min": целое число (-15..-1 для прематча, 1..95+ для игры),
+      "sec": целое число 0..59,
+      "team": "home" | "away" | "none",
+      "type": "ОДИН ИЗ ДОПУСТИМЫХ ТИПОВ НИЖЕ",
+      "players": ["Точное Имя Фамилия из состава"],
+      "text": "Живой репортаж на русском языке",
+      "xg": число 0.01..0.95 (для shot/penalty)
+    }
+  ],
+  "state_at_end": {
+    "momentum_note": "Краткая сводка хода игры к концу отрезка"
+  }
+}
+
+ДОПУСТИМЫЕ ЗНАЧЕНИЯ ПОЛЯ "type" (НИКАКИХ ДРУГИХ ТИПОВ НЕ ПРИДУМЫВАЙ):
+• Игровые: kickoff, possession, pass, dribble, tackle, duel, foul, yellow, red, shot, save, miss, post, goal, own_goal, penalty, offside, corner, freekick, injury, sub, var, ref_error, incident, cooling_break, kit_issue, verbal_warning, highlight, halftime, fulltime.
+• Прематч (только min -15..-1 в 1-м отрезке): commentator_intro, tactical_note, stat_display, crowd, incident, lineup, walkout, anthem, coin_toss, photo, warmup, kickoff_buildup.
+• Не выдумывай типы вроде prematch_lineups, throw_in, aerial — используй вместо них lineup, pass, duel.`;
 }
 var uid = () => crypto3.randomBytes(5).toString("hex");
 var mkCode = () => {
@@ -3159,7 +3189,8 @@ function seed() {
       secPerMin: 4,
       breakSec: 20,
       chunks: 2,
-      auto: false,
+      auto: true,
+      techDefeat: false,
       squadMax: 28,
       grounding: false,
       tgToken: "",
@@ -5759,6 +5790,170 @@ ${lineText(ctx, "away")}
 var PRE_TYPES = new Set("commentator_intro tactical_note stat_display crowd incident lineup walkout anthem coin_toss photo warmup kickoff_buildup".split(" "));
 var TYPES = new Set(("kickoff possession pass dribble tackle duel foul yellow red shot save miss post goal own_goal penalty offside corner freekick injury sub var ref_error incident cooling_break kit_issue verbal_warning highlight halftime fulltime " + [...PRE_TYPES].join(" ")).split(" "));
 var NONACT_TYPES = /* @__PURE__ */ new Set([...PRE_TYPES, "var", "incident", "cooling_break", "highlight", "kit_issue", "verbal_warning"]);
+var EVENT_TYPE_ALIASES: Record<string, string> = {
+  prematch_lineups: "lineup",
+  prematch_lineup: "lineup",
+  lineups: "lineup",
+  starting_lineups: "lineup",
+  prematch_atmosphere: "crowd",
+  atmosphere: "crowd",
+  fans: "crowd",
+  choreo: "crowd",
+  pyro: "crowd",
+  postmatch_crowd: "crowd",
+  prematch_referee_check: "commentator_intro",
+  prematch_referee: "commentator_intro",
+  referee_check: "commentator_intro",
+  referee_intro: "commentator_intro",
+  prematch_intro: "commentator_intro",
+  broadcast_intro: "commentator_intro",
+  commentary_intro: "commentator_intro",
+  intro: "commentator_intro",
+  studio: "commentator_intro",
+  prematch_weather: "commentator_intro",
+  prematch_analysis: "tactical_note",
+  prematch_tactics: "tactical_note",
+  tactics: "tactical_note",
+  tactical: "tactical_note",
+  analysis: "tactical_note",
+  postmatch_note: "tactical_note",
+  prematch_stats: "stat_display",
+  stats: "stat_display",
+  h2h: "stat_display",
+  standings: "stat_display",
+  prematch_warmup: "warmup",
+  warm_up: "warmup",
+  prematch_walkout: "walkout",
+  tunnel: "walkout",
+  players_out: "walkout",
+  prematch_anthem: "anthem",
+  national_anthem: "anthem",
+  prematch_coin_toss: "coin_toss",
+  toss: "coin_toss",
+  prematch_photo: "photo",
+  team_photo: "photo",
+  prematch_buildup: "kickoff_buildup",
+  throw_in: "pass",
+  throwin: "pass",
+  throw: "pass",
+  goal_kick: "pass",
+  goalkick: "pass",
+  restart: "pass",
+  cross: "pass",
+  key_pass: "pass",
+  through_ball: "pass",
+  long_ball: "pass",
+  backpass: "pass",
+  build_up: "possession",
+  buildup: "possession",
+  attack: "possession",
+  counter: "possession",
+  counterattack: "possession",
+  transition: "possession",
+  aerial: "duel",
+  aerial_duel: "duel",
+  header_duel: "duel",
+  challenge: "duel",
+  battle: "duel",
+  "50_50": "duel",
+  sprint: "duel",
+  pressing: "duel",
+  interception: "tackle",
+  clearance: "tackle",
+  block: "tackle",
+  blocked_shot: "tackle",
+  recovery: "tackle",
+  recover: "tackle",
+  dispossess: "tackle",
+  skill: "dribble",
+  nutmeg: "dribble",
+  take_on: "dribble",
+  free_kick: "freekick",
+  fk: "freekick",
+  direct_freekick: "freekick",
+  indirect_freekick: "freekick",
+  kick_off: "kickoff",
+  start: "kickoff",
+  second_half_start: "kickoff",
+  half_time: "halftime",
+  ht: "halftime",
+  break: "halftime",
+  halftime_whistle: "halftime",
+  full_time: "fulltime",
+  ft: "fulltime",
+  final_whistle: "fulltime",
+  fulltime_whistle: "fulltime",
+  match_end: "fulltime",
+  end: "fulltime",
+  yellow_card: "yellow",
+  yc: "yellow",
+  booking: "yellow",
+  caution: "yellow",
+  red_card: "red",
+  rc: "red",
+  second_yellow: "red",
+  sent_off: "red",
+  ejection: "red",
+  substitution: "sub",
+  change: "sub",
+  woodwork: "post",
+  crossbar: "post",
+  bar: "post",
+  chance: "highlight",
+  big_chance: "highlight",
+  danger: "highlight",
+  moment: "highlight",
+  header: "shot",
+  volley: "shot",
+  attempt: "shot",
+  penalty_kick: "penalty",
+  pen: "penalty",
+  penalty_miss: "miss",
+  missed_penalty: "miss",
+  wide: "miss",
+  over: "miss",
+  penalty_saved: "save",
+  saved: "save",
+  gk_save: "save",
+  var_check: "var",
+  var_review: "var",
+  video_review: "var",
+  referee_error: "ref_error",
+  ref_mistake: "ref_error",
+  water_break: "cooling_break",
+  hydration_break: "cooling_break",
+  warning: "verbal_warning"
+};
+function normalizeEventType(rawType: any) {
+  let t = String(rawType || "").toLowerCase().trim().replace(/[\s-]+/g, "_");
+  if (EVENT_TYPE_ALIASES[t]) return EVENT_TYPE_ALIASES[t];
+  if (TYPES.has(t)) return t;
+  if (t.startsWith("prematch") || t.startsWith("pre_")) return "commentator_intro";
+  if (t.startsWith("postmatch") || t.startsWith("post_")) return "tactical_note";
+  return t;
+}
+function parseEventMinSec(e: any) {
+  let sec = clamp(Math.round(+e.sec) || 0, 0, 59);
+  const rawVal = e.min !== void 0 && e.min !== null && e.min !== "" ? e.min : e.minute !== void 0 && e.minute !== null && e.minute !== "" ? e.minute : e.time;
+  if (typeof rawVal === "number" && Number.isFinite(rawVal)) {
+    return { min: Math.round(rawVal), sec };
+  }
+  const s = String(rawVal ?? "").trim();
+  if (!s) return { min: Number.NaN, sec };
+  const clock = s.match(/^(-?\d{1,3}):(\d{2})$/);
+  if (clock) {
+    return { min: Number(clock[1]), sec: clamp(Number(clock[2]), 0, 59) };
+  }
+  const added = s.match(/^(\d{1,3})\s*\+\s*(\d{1,2})'?$/);
+  if (added) {
+    return { min: Number(added[1]) + Number(added[2]), sec };
+  }
+  const simple = s.replace(/['’′\s]/g, "").match(/^(-?\d{1,3})$/);
+  if (simple) {
+    return { min: Number(simple[1]), sec };
+  }
+  return { min: Number.NaN, sec };
+}
 var SUB_MAX_PLAYERS = 5;
 var SUB_MAX_WINDOWS = 3;
 function subWindows(times) {
@@ -5815,29 +6010,46 @@ function normalizeEvents(raw, a, b, ctx, prev, minEv = 3) {
   const off = new Set(st.off.map(norm));
   const subs = { ...st.subs };
   const subT = { home: [...st.subT.home], away: [...st.subT.away] };
-  let out = [];
+  let out = [], nextPreMin = -14;
   for (const e of raw) {
     if (!e || typeof e !== "object") continue;
-    const type = String(e.type || "").toLowerCase().trim();
-    if (!TYPES.has(type)) {
-      probs.push("\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u044B\u0439 \u0442\u0438\u043F " + type);
-      continue;
-    }
-    let min = Math.round(+e.min), sec = clamp(Math.round(+e.sec) || 0, 0, 59);
+    let type = normalizeEventType(e.type);
+    let { min, sec } = parseEventMinSec(e);
     if (!Number.isFinite(min)) {
-      probs.push("\u043D\u0435\u0442 \u043C\u0438\u043D\u0443\u0442\u044B");
-      continue;
-    }
-    if (min < 0) {
-      if (!PRE_TYPES.has(type)) {
+      if (PRE_TYPES.has(type) && a === 1) {
+        min = nextPreMin;
+        nextPreMin = Math.min(-1, nextPreMin + 1);
+      } else if (type === "kickoff") {
+        min = a;
+      } else if (type === "halftime") {
+        min = 45;
+      } else if (type === "fulltime") {
+        min = 90;
+      } else {
         probs.push("\u043D\u0435\u0442 \u043C\u0438\u043D\u0443\u0442\u044B");
         continue;
       }
-      if (a !== 1) {
+    }
+    if (!TYPES.has(type)) {
+      type = min < 0 ? "commentator_intro" : Array.isArray(e.players) && e.players.length ? "duel" : "highlight";
+    }
+    if (min <= 0 && a === 1 && PRE_TYPES.has(type)) {
+      min = min === 0 ? -1 : clamp(min, -20, -1);
+    } else if (min < 0) {
+      if (!PRE_TYPES.has(type)) {
+        if (a === 1 && !["goal", "own_goal", "yellow", "red", "sub", "penalty"].includes(type)) {
+          type = "commentator_intro";
+          min = clamp(min, -20, -1);
+        } else {
+          probs.push("\u043D\u0435\u0442 \u043C\u0438\u043D\u0443\u0442\u044B");
+          continue;
+        }
+      } else if (a !== 1) {
         probs.push("\u043F\u0440\u0435\u043C\u0430\u0442\u0447 \u0434\u043E\u043F\u0443\u0441\u0442\u0438\u043C \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043D\u0430\u0447\u0430\u043B\u0435 \u043C\u0430\u0442\u0447\u0430");
         continue;
+      } else {
+        min = clamp(min, -20, -1);
       }
-      min = clamp(min, -20, -1);
     } else if (min < a - 1 || min > b + 10) {
       probs.push(`\u043C\u0438\u043D\u0443\u0442\u0430 ${min} \u0432\u043D\u0435 \u043F\u0435\u0440\u0438\u043E\u0434\u0430 ${a}\u2013${b}`);
       continue;
@@ -6008,8 +6220,9 @@ async function genPeriod(a, b, ctx, prev, note, depth = 0) {
       const user = buildUser(ctx, a, b, st, issues);
       if (!ctx.prompt1) ctx.prompt1 = user;
       const r = await llmJSON(sys, user, { task: "match", temp: 0.9, max: 3e4 });
-      const evs = normalizeEvents(r.events, a, b, ctx, prev);
-      return { events: evs, note: r.state_at_end?.momentum_note || note };
+      const rawEvents = Array.isArray(r) ? r : r?.events || r?.match_events || [];
+      const evs = normalizeEvents(rawEvents, a, b, ctx, prev);
+      return { events: evs, note: r?.state_at_end?.momentum_note || note };
     } catch (e) {
       lastErr = e.message;
       issues = e.message;
@@ -6034,8 +6247,9 @@ async function genLight(ctx) {
       const user = buildUser(ctx, 1, 90, null, issues, "light") + "\n\n\u0412\u0435\u0440\u043D\u0438 \u0441\u0432\u043E\u0434\u043A\u0443 \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 \u0441\u0432\u043E\u0434\u043A\u0438: JSON {events, stats, note}.";
       if (!ctx.prompt1) ctx.prompt1 = user;
       const r = await llmJSON(sys, user, { task: "match-light", temp: 0.9, max: 8e3 });
-      const events = normalizeEvents(r.events || [], 1, 90, ctx, [], 0);
-      return { events, stats: r.stats || null, note: String(r.note || "") };
+      const rawEvents = Array.isArray(r) ? r : r?.events || r?.match_events || [];
+      const events = normalizeEvents(rawEvents, 1, 90, ctx, [], 0);
+      return { events, stats: r?.stats || null, note: String(r?.note || "") };
     } catch (e) {
       lastErr = e.message;
       issues = e.message;
@@ -6224,7 +6438,7 @@ function computeStats(events, ctx) {
 var live = {};
 var timers = {};
 var fullSim = (f) => true;
-var AUTO_COMPS = /* @__PURE__ */ new Set(["rpl", "cup", "supercup", "playoff", "playoff_rpl_fnl"]);
+var AUTO_COMPS = /* @__PURE__ */ new Set(["rpl", "cup", "supercup", "playoff", "playoff_rpl_fnl", "friendly_match"]);
 var isMediaFx = (f) => String(f.comp || "").startsWith("media") || String(f.playoffTieId || "").startsWith("media");
 var isAutoFx = (f) => AUTO_COMPS.has(f.comp) && !isMediaFx(f);
 var isLightFx = (f) => !isAutoFx(f) && (/^(fnl|2la|2lb|media)/.test(String(f.comp || "")) || isMediaFx(f));
@@ -6280,14 +6494,26 @@ ${esc(f.note)}`);
 function enqueue(id, force = false, manual = true) {
   const f = fx(id);
   if (!f || f.status !== "scheduled") return;
-  if (!force && db.settings.techDefeat !== false && f.comp !== FRIENDLY_COMP) {
-    const pr = { home: techProblems(f, f.home), away: techProblems(f, f.away) };
-    if (pr.home.length || pr.away.length) {
-      applyTechDefeat(f, pr);
-      return;
+  if (!force && db.settings.techDefeat === true && f.comp !== FRIENDLY_COMP) {
+    if (manual || Date.now() >= realAt(f).getTime()) {
+      const pr = { home: techProblems(f, f.home), away: techProblems(f, f.away) };
+      if (pr.home.length || pr.away.length) {
+        const applied = applyTechDefeat(f, pr);
+        if (!applied && !manual) {
+          f.noAuto = true;
+          save();
+        }
+        return;
+      }
+    } else {
+      const pr = { home: techProblems(f, f.home), away: techProblems(f, f.away) };
+      if (pr.home.length || pr.away.length) {
+        return;
+      }
     }
   }
   f.status = "queued";
+  f.err = "";
   save();
   queue.push({ id, manual });
   pumpQ();
@@ -6304,6 +6530,7 @@ function pumpQ() {
 }
 async function runMatch(id, opts = {}) {
   const f = fx(id);
+  if (!f) return;
   f.status = "generating";
   f.err = "";
   f.aiCalls = 0;
@@ -6345,11 +6572,20 @@ async function runMatch(id, opts = {}) {
         finish(id);
         return;
       }
-      const startAt = opts.manual ? Date.now() : Math.max(Date.now(), realAt(f).getTime());
-      if (startAt - Date.now() > 1e3) {
+      const targetMs = realAt(f).getTime();
+      const startAt = opts.manual ? Date.now() : Number.isFinite(targetMs) ? Math.max(Date.now(), targetMs) : Date.now();
+      const waitMs = startAt - Date.now();
+      if (waitMs > 1e3) {
+        if (waitMs > 2147483647) {
+          f.status = "scheduled";
+          f.hold = null;
+          save();
+          return;
+        }
         f.hold = startAt;
         save();
-        timers[id] = setTimeout(() => beginLive(id), startAt - Date.now());
+        if (timers[id]) clearTimeout(timers[id]);
+        timers[id] = setTimeout(() => beginLive(id), waitMs);
       } else {
         beginLive(id);
       }
@@ -6548,7 +6784,14 @@ function resumeLive() {
     if (f.status === "live" && getMatch(f.id)) startLive(f.id);
     else if (f.status === "generating" && f.hold && getMatch(f.id)?.events?.length) {
       const fid = f.id;
-      timers[fid] = setTimeout(() => beginLive(fid), Math.max(0, f.hold - Date.now()));
+      const waitMs = Math.max(0, f.hold - Date.now());
+      if (waitMs > 2147483647) {
+        f.status = "scheduled";
+        f.hold = null;
+      } else {
+        if (timers[fid]) clearTimeout(timers[fid]);
+        timers[fid] = setTimeout(() => beginLive(fid), waitMs);
+      }
     } else if (["live", "generating", "queued"].includes(f.status)) {
       f.status = "scheduled";
       f.hold = null;
@@ -6561,6 +6804,7 @@ var tgBusy = false;
 var tgLastStatus = { ok: true };
 var tgCooldownUntil = 0;
 function tg(text) {
+  if (process.env.NODE_ENV === "test") return;
   const token = tgToken();
   const chat = tgChat();
   if (!token || !chat) {
@@ -6905,10 +7149,10 @@ function genSeason(start, name, opts) {
   fillWeeks(rplWeeks, 1);
   db.fixtures = db.fixtures.filter((f) => f.season !== season);
   ensureSuperCupFixture(season, addDays(sat0, -1));
-  const r = rng("season" + name);
+  const r = rng("season" + name + "_" + Date.now() + "_" + crypto2.randomBytes(8).toString("hex"));
   for (const comp of COMPS.filter((x) => x.type === "league")) {
     const c = comp.id;
-    let ids = db.teams.filter((t) => t.comp === c).map((t) => t.id);
+    let ids = shuffle(db.teams.filter((t) => t.comp === c).map((t) => t.id), r);
     if (ids.length < 2) continue;
     if (ids.length % 2) ids.push(null);
     const n = ids.length, arr = [...ids], rounds = [];
@@ -6916,12 +7160,38 @@ function genSeason(start, name, opts) {
       const pairs = [];
       for (let i = 0; i < n / 2; i++) {
         const a = arr[i], b = arr[n - 1 - i];
-        if (a && b) pairs.push(k % 2 ? [b, a] : [a, b]);
+        if (a && b) {
+          const base = k % 2 ? [b, a] : [a, b];
+          pairs.push(r() < 0.5 ? [base[1], base[0]] : base);
+        }
       }
-      rounds.push(pairs);
+      rounds.push({ idx: k, pairs });
       arr.splice(1, 0, arr.pop());
     }
-    const all = rounds.concat(rounds.map((p) => p.map(([a, b]) => [b, a])));
+    const firstHalf = shuffle(rounds, r);
+    let secondHalf = shuffle(
+      firstHalf.map((x) => ({ idx: x.idx, pairs: x.pairs.map(([a, b]) => [b, a]) })),
+      r
+    );
+    if (firstHalf.length >= 3) {
+      for (let tries = 0; tries < 30; tries++) {
+        const samePos = secondHalf.some((x, i) => x.idx === firstHalf[i].idx);
+        const backToBack = secondHalf[0].idx === firstHalf[firstHalf.length - 1].idx;
+        if (!samePos && !backToBack) break;
+        secondHalf = shuffle(secondHalf, r);
+      }
+      if (secondHalf[0].idx === firstHalf[0].idx || secondHalf[0].idx === firstHalf[firstHalf.length - 1].idx) {
+        const swapIdx = secondHalf.findIndex((x) => x.idx !== firstHalf[0].idx && x.idx !== firstHalf[firstHalf.length - 1].idx);
+        if (swapIdx > 0) [secondHalf[0], secondHalf[swapIdx]] = [secondHalf[swapIdx], secondHalf[0]];
+      }
+      for (let i = 1; i < secondHalf.length; i++) {
+        if (secondHalf[i].idx === firstHalf[i].idx) {
+          const swapIdx = secondHalf.findIndex((x, j) => j !== i && j > 0 && x.idx !== firstHalf[i].idx && secondHalf[i].idx !== firstHalf[j].idx);
+          if (swapIdx >= 0) [secondHalf[i], secondHalf[swapIdx]] = [secondHalf[swapIdx], secondHalf[i]];
+        }
+      }
+    }
+    const all = firstHalf.concat(secondHalf).map((x) => x.pairs);
     all.forEach((pairs, ri) => {
       const wk = weekends[ri] || { sat: addDays(sat0, ri * 7), hasCup: false, hasRplCup: false };
       const sat = wk.sat;
@@ -7397,9 +7667,19 @@ function advanceCup() {
   save();
 }
 function realAt(f) {
-  const d = f.realDate || f.date || "2026-11-07";
-  const t = f.realTime || f.time || "12:00";
-  return /* @__PURE__ */ new Date(`${d}T${t}:00+03:00`);
+  const rawD = String(f.realDate || f.date || "2026-11-07").trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(rawD) ? rawD : "2026-11-07";
+  const rawT = String(f.realTime || f.time || "12:00").trim();
+  let t = "12:00:00";
+  const m = rawT.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (m) {
+    const hh = String(Math.min(23, Math.max(0, Number(m[1])))).padStart(2, "0");
+    const mm = String(Math.min(59, Math.max(0, Number(m[2])))).padStart(2, "0");
+    const ss = String(Math.min(59, Math.max(0, Number(m[3] || 0)))).padStart(2, "0");
+    t = `${hh}:${mm}:${ss}`;
+  }
+  const dt = /* @__PURE__ */ new Date(`${d}T${t}+03:00`);
+  return Number.isFinite(dt.getTime()) ? dt : /* @__PURE__ */ new Date("2026-11-07T12:00:00+03:00");
 }
 function getAvailableSeasons() {
   const set = /* @__PURE__ */ new Set();
@@ -7464,7 +7744,7 @@ function ensureDualTimes(targetSeason, force = false) {
     block.fixtures.sort((a, b) => a.id.localeCompare(b.id));
     const randomTimes = [];
     const nightSlots = ["00:30", "01:00", "01:15", "01:30", "02:00"];
-    const rGen = rng(season + "_" + block.key + "_" + blockIndex);
+    const rGen = force ? Math.random : rng(season + "_" + block.key + "_" + blockIndex);
     if (N >= 2) {
       const nightIdx = Math.floor(rGen() * nightSlots.length);
       randomTimes.push(nightSlots[nightIdx]);
@@ -7499,10 +7779,10 @@ function ensureDualTimes(targetSeason, force = false) {
   });
   seasonFixtures.filter((f) => f.comp !== "rpl" && f.comp !== "cup" && f.comp !== "supercup").forEach((f) => {
     const rnd = Number(f.round) || 1;
-    if (!f.realDate || force) {
+    if (!f.realDate || force && f.comp !== FRIENDLY_COMP) {
       f.realDate = addDays(baseRealStart, rnd - 1);
     }
-    if (!f.realTime || force) {
+    if (!f.realTime || force && f.comp !== FRIENDLY_COMP) {
       f.realTime = f.time || "14:00";
     }
   });
@@ -8475,13 +8755,14 @@ function getHeadToHead(homeTid, awayTid, currentFixtureId) {
   const matches = [];
   for (const f of realPlayed) {
     const isDirectHome = f.home === homeTid;
-    const hg = f.hg ?? 0;
-    const ag = f.ag ?? 0;
+    const hg = typeof f.hg === "number" ? f.hg : typeof f.homeScore === "number" ? f.homeScore : f.st?.teams?.home?.g ?? 0;
+    const ag = typeof f.ag === "number" ? f.ag : typeof f.awayScore === "number" ? f.awayScore : f.st?.teams?.away?.g ?? 0;
     const homeGoals = isDirectHome ? hg : ag;
     const awayGoals = isDirectHome ? ag : hg;
     let outcome = "draw";
     if (homeGoals > awayGoals) outcome = "home";
     else if (awayGoals > homeGoals) outcome = "away";
+    const penText = f.penalties ? `${f.penalties.home} : ${f.penalties.away} \u043F\u0435\u043D.` : f.pen ? `${f.pen.hg} : ${f.pen.ag} \u043F\u0435\u043D.` : void 0;
     matches.push({
       id: f.id,
       date: f.date || "2026-08-10",
@@ -8497,7 +8778,7 @@ function getHeadToHead(homeTid, awayTid, currentFixtureId) {
       homeGoals: hg,
       awayGoals: ag,
       score: `${hg} : ${ag}`,
-      penalties: f.penalties ? `${f.penalties.home} : ${f.penalties.away} \u043F\u0435\u043D.` : void 0,
+      penalties: penText,
       outcome,
       // относительно текущей пары (homeTid против awayTid)
       winnerId: hg > ag ? f.home : ag > hg ? f.away : null,
@@ -8505,73 +8786,6 @@ function getHeadToHead(homeTid, awayTid, currentFixtureId) {
       isSimulated: true
     });
     if (matches.length >= 10) break;
-  }
-  if (matches.length < 10) {
-    const need = 10 - matches.length;
-    let seedVal = 0;
-    for (let i = 0; i < (homeTid + awayTid).length; i++) {
-      seedVal = seedVal * 31 + (homeTid + awayTid).charCodeAt(i) & 16777215;
-    }
-    const pseudoRandom = (step) => {
-      const x = Math.sin(seedVal + step * 7919) * 1e4;
-      return x - Math.floor(x);
-    };
-    const comps = ["\u0420\u041F\u041B", "\u0420\u041F\u041B", "\u0420\u041F\u041B", "\u041A\u0443\u0431\u043E\u043A \u0420\u043E\u0441\u0441\u0438\u0438", "\u0420\u041F\u041B", "\u0420\u041F\u041B", "\u041A\u0443\u0431\u043E\u043A \u0420\u043E\u0441\u0441\u0438\u0438", "\u0421\u0443\u043F\u0435\u0440\u043A\u0443\u0431\u043E\u043A"];
-    const years = [2026, 2025, 2025, 2024, 2024, 2023, 2023, 2022, 2022, 2021];
-    const months = ["03", "05", "08", "09", "10", "11", "04", "07", "12", "06"];
-    const days = ["12", "24", "18", "03", "29", "15", "07", "21", "30", "14"];
-    for (let i = 0; i < need; i++) {
-      const idx = matches.length;
-      const r1 = pseudoRandom(idx * 3 + 1);
-      const r2 = pseudoRandom(idx * 3 + 2);
-      const r3 = pseudoRandom(idx * 3 + 3);
-      const altHome = idx % 2 === 0;
-      const currentHomeId = altHome ? homeTid : awayTid;
-      const currentAwayId = altHome ? awayTid : homeTid;
-      let hScore = 0;
-      let aScore = 0;
-      if (r1 < 0.28) {
-        hScore = r2 < 0.5 ? 1 : r2 < 0.85 ? 0 : 2;
-        aScore = hScore;
-      } else if (r1 < 0.65) {
-        hScore = r2 < 0.4 ? 1 : r2 < 0.8 ? 2 : 3;
-        aScore = r3 < 0.5 ? 0 : 1;
-        if (hScore <= aScore) hScore = aScore + 1;
-      } else {
-        aScore = r2 < 0.45 ? 1 : r2 < 0.85 ? 2 : 3;
-        hScore = r3 < 0.6 ? 0 : 1;
-        if (aScore <= hScore) aScore = hScore + 1;
-      }
-      const isDirectHome = currentHomeId === homeTid;
-      const hgRel = isDirectHome ? hScore : aScore;
-      const agRel = isDirectHome ? aScore : hScore;
-      let outcome = "draw";
-      if (hgRel > agRel) outcome = "home";
-      else if (agRel > hgRel) outcome = "away";
-      const yr = years[idx % years.length];
-      const mo = months[idx % months.length];
-      const dy = days[idx % days.length];
-      matches.push({
-        id: `hist_${homeTid}_${awayTid}_${idx}`,
-        date: `${yr}-${mo}-${dy}`,
-        time: "19:00",
-        comp: comps[idx % comps.length],
-        round: comps[idx % comps.length].includes("\u041A\u0443\u0431\u043E\u043A") ? "1/4 \u0444\u0438\u043D\u0430\u043B\u0430" : `${idx % 25 + 1} \u0442\u0443\u0440`,
-        homeId: currentHomeId,
-        awayId: currentAwayId,
-        homeName: tn(currentHomeId),
-        awayName: tn(currentAwayId),
-        homeLogo: teamLogo(currentHomeId),
-        awayLogo: teamLogo(currentAwayId),
-        homeGoals: hScore,
-        awayGoals: aScore,
-        score: `${hScore} : ${aScore}`,
-        outcome,
-        winnerId: hScore > aScore ? currentHomeId : aScore > hScore ? currentAwayId : null,
-        stadium: team(currentHomeId)?.stadium || "",
-        isSimulated: false
-      });
-    }
   }
   let homeWins = 0, draws = 0, awayWins = 0, homeGoalsTotal = 0, awayGoalsTotal = 0;
   for (const m of matches) {
@@ -11000,6 +11214,7 @@ app.post("/api/admin/settings", admin, (req, res) => {
     saveSecretsFile(secUpdates);
   }
   save();
+  if (s.auto) setTimeout(runAutoStartTick, 50);
   res.json({
     ok: 1,
     secretsFile: "secrets.json",
@@ -11538,6 +11753,14 @@ app.post("/api/admin/ai-queue/dequeue", admin, (req, res) => {
 });
 app.post("/api/admin/run", admin, async (req, res) => {
   const b = req.body;
+  if (b.fid) {
+    const held = (db.fixtures || []).find((f) => f.id === b.fid);
+    if (held && held.status === "generating" && held.hold && getMatch(held.id)) {
+      clearTimeout(timers[held.id]);
+      beginLive(held.id);
+      return res.json({ full: 1, bg: 0 });
+    }
+  }
   let list = seasonFx().filter((f) => f.status === "scheduled");
   if (b.fid) list = (db.fixtures || []).filter((f) => f.id === b.fid && f.status === "scheduled");
   else if (b.date) list = list.filter((f) => f.date === b.date);
@@ -11554,7 +11777,7 @@ app.post("/api/admin/fixture", admin, (req, res) => {
     if (f.status === "live" || f.hold) {
       clearTimeout(timers[f.id]);
     }
-    Object.assign(f, { status: "scheduled", hg: null, ag: null, pen: null, st: null, pos: 0, final: null, err: "", hold: null, aiCalls: 0 });
+    Object.assign(f, { status: "scheduled", hg: null, ag: null, pen: null, st: null, pos: 0, final: null, err: "", hold: null, aiCalls: 0, noAuto: false });
     try {
       fs3.unlinkSync(path3.join(MDIR, f.id + ".json"));
     } catch {
@@ -11587,14 +11810,37 @@ app.post("/api/admin/fixture", admin, (req, res) => {
     f.gameTime = gTime;
     f.time = gTime;
   }
+  let realSchedChanged = false;
   const rDate = String(req.body.realDate || "").trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(rDate)) {
+    if (f.realDate !== rDate) realSchedChanged = true;
     f.realDate = rDate;
   }
   let rTime = String(req.body.realTime || "").trim();
-  if (/^\d{1,2}:\d{2}$/.test(rTime)) {
-    if (rTime.length === 4) rTime = "0" + rTime;
+  if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(rTime)) {
+    if (/^\d:/.test(rTime)) rTime = "0" + rTime;
+    if (f.realTime !== rTime) realSchedChanged = true;
     f.realTime = rTime;
+  }
+  if (realSchedChanged) {
+    f.noAuto = false;
+    f.err = "";
+    if (f.status === "generating" && f.hold) {
+      clearTimeout(timers[f.id]);
+      delete timers[f.id];
+      const newStart = realAt(f).getTime();
+      const waitMs = newStart - Date.now();
+      const leadMs = (db.settings.aiLeadSec !== void 0 ? +db.settings.aiLeadSec : 60) * 1e3;
+      if (waitMs <= 1e3) {
+        beginLive(f.id);
+      } else if (waitMs <= leadMs + 6e4 && waitMs <= 2147483647) {
+        f.hold = newStart;
+        timers[f.id] = setTimeout(() => beginLive(f.id), waitMs);
+      } else {
+        f.hold = null;
+        f.status = "scheduled";
+      }
+    }
   }
   if (req.body.stadium !== void 0 && typeof req.body.stadium === "string") {
     f.stadium = req.body.stadium.trim();
@@ -11604,6 +11850,7 @@ app.post("/api/admin/fixture", admin, (req, res) => {
   }
   invalidateAgg();
   saveNow();
+  if (realSchedChanged) setTimeout(runAutoStartTick, 50);
   res.json({ ok: 1, fixture: pubFx(f) });
 });
 app.get("/api/admin/lineups/:fid", admin, (req, res) => {
@@ -13019,6 +13266,7 @@ function tryFinalizeFriendly(r) {
   r.fixtureId = f.id;
   r.resolvedAt = nowIso;
   invalidateAgg();
+  setTimeout(runAutoStartTick, 50);
   try {
     tg(`\u{1F91D} <b>\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u043C\u0430\u0442\u0447 \u0441\u043E\u0433\u043B\u0430\u0441\u043E\u0432\u0430\u043D</b>
 \xAB${esc(tn(place.home))}\xBB \u2014 \xAB${esc(tn(place.away))}\xBB
@@ -13219,40 +13467,45 @@ app.post("/api/admin/tournament", admin, (req, res) => {
     createdAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   db.tournaments.push(trn);
-  const arr = [...teams];
+  const arr = shuffle(teams, Math.random);
   if (arr.length % 2) arr.push(null);
   const n = arr.length;
-  let dayOffset = 0;
+  const trnRounds = [];
   for (let k = 0; k < n - 1; k++) {
-    const matchDate = addDays(startDate, dayOffset);
-    let slot = 0;
+    const pairs = [];
     for (let i = 0; i < n / 2; i++) {
       const a = arr[i], b = arr[n - 1 - i];
       if (a && b) {
-        const fxObj = {
-          id: uid(),
-          season: S(),
-          comp: compId,
-          round: k + 1,
-          date: matchDate,
-          time: ["14:00", "17:00", "19:30"][slot % 3],
-          home: k % 2 ? b : a,
-          away: k % 2 ? a : b,
-          status: "scheduled",
-          hg: null,
-          ag: null,
-          pos: 0,
-          tournamentName: trn.name,
-          venue: `${trn.city}, ${trn.country}`
-        };
-        assignReferee(fxObj);
-        db.fixtures.push(fxObj);
-        slot++;
+        const base = k % 2 ? [b, a] : [a, b];
+        pairs.push(Math.random() < 0.5 ? [base[1], base[0]] : base);
       }
     }
+    trnRounds.push(shuffle(pairs, Math.random));
     arr.splice(1, 0, arr.pop());
-    dayOffset += 3;
   }
+  shuffle(trnRounds, Math.random).forEach((pairs, rIdx) => {
+    const matchDate = addDays(startDate, rIdx * 3);
+    pairs.forEach(([home, away], slot) => {
+      const fxObj = {
+        id: uid(),
+        season: S(),
+        comp: compId,
+        round: rIdx + 1,
+        date: matchDate,
+        time: ["14:00", "17:00", "19:30"][slot % 3],
+        home,
+        away,
+        status: "scheduled",
+        hg: null,
+        ag: null,
+        pos: 0,
+        tournamentName: trn.name,
+        venue: `${trn.city}, ${trn.country}`
+      };
+      assignReferee(fxObj);
+      db.fixtures.push(fxObj);
+    });
+  });
   save();
   res.json({ ok: 1, tournament: trn });
 });
@@ -14208,20 +14461,30 @@ setInterval(() => {
   } catch (err) {
     console.error("daily sync:", err?.message);
   }
-}, 36e5);
+}, 36e5).unref?.();
 invalidateAgg();
 resumeLive();
-setInterval(() => {
-  if (!db.settings.auto) return;
+function runAutoStartTick() {
+  if (!db?.settings?.auto) return;
   const now = Date.now(), lead = (db.settings.aiLeadSec !== void 0 ? +db.settings.aiLeadSec : 60) * 1e3;
-  for (const f of seasonFx()) {
+  for (const f of db.fixtures || []) {
+    if (f.season && f.season !== S()) continue;
+    if (f.status === "generating" && f.hold && !timers[f.id] && getMatch(f.id)?.events?.length) {
+      const waitMs = Math.max(0, f.hold - now);
+      if (waitMs <= 1e3) beginLive(f.id);
+      else if (waitMs <= 2147483647) timers[f.id] = setTimeout(() => beginLive(f.id), waitMs);
+      continue;
+    }
     if (f.status !== "scheduled" || f.noAuto || !isAutoFx(f)) continue;
     const t = realAt(f).getTime();
+    if (!Number.isFinite(t)) continue;
     if (t - lead > now) continue;
     if (now - t > AI_MAX_LATE_MS) continue;
     enqueue(f.id, false, false);
   }
-}, 1e4);
+}
+setTimeout(runAutoStartTick, 2e3).unref?.();
+setInterval(runAutoStartTick, 5e3).unref?.();
 var shutdown = async () => {
   saveNow();
   await Promise.race([pgFlush(() => db), new Promise((r) => setTimeout(r, 8e3))]);
@@ -14272,6 +14535,7 @@ if (process.env.NODE_ENV !== "test") {
   startServer();
 }
 export {
+  SYS_DEFAULT,
   app,
   db,
   determineSuperCupTeams,
@@ -14282,6 +14546,9 @@ export {
   getPreviousSeason,
   getSuperCupVenue,
   getTableForSeason,
+  isAutoFx,
   isFinalMatch,
-  realAt
+  normalizeEvents,
+  realAt,
+  runAutoStartTick
 };
